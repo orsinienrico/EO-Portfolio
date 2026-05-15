@@ -26,7 +26,7 @@
   --brd:#dde0e6;--brd2:#d0d4dc;
   --t1:#111827;--t2:#4b5563;--t3:#9ca3af;
   --acc:#2563eb;--acc2:#3b82f6;--adim:rgba(37,99,235,.06);--adim2:rgba(37,99,235,.12);
-  --grn:#059669;--grn2:#10b981;-i-gbg:rgba(5,150,105,.05);--gbd:rgba(5,150,105,.2);
+  --grn:#059669;--grn2:#10b981;--gbg:rgba(5,150,105,.05);--gbd:rgba(5,150,105,.2);
   --red:#dc2626;--red2:#ef4444;--rbg:rgba(220,38,38,.05);--rbd:rgba(220,38,38,.2);
   --yel:#d97706;--pur:#7c3aed;--ora:#ea580c;--cya:#0891b2;--pnk:#db2777;
   --glass:rgba(255,255,255,.8);--glass2:rgba(255,255,255,.5);
@@ -283,124 +283,46 @@ function holdingTotalCost(h){if(h.totalCost!=null)return h.totalCost;if(h.avgCos
 function staticHolding(h){var c=holdingTotalCost(h);return Object.assign({},h,{currentPrice:null,previousClose:null,dayChange:null,dayChangePct:null,marketValue:c,totalCost:c,gainLoss:null,gainLossPct:null,sparkline:[],priceDate:null,live:false,loaded:true,estimated:false})}
 function estimatedHolding(h){var c=holdingTotalCost(h);var p=h.avgCost||null;var mv=p!=null&&h.shares!=null?p*h.shares:c;return Object.assign({},h,{currentPrice:p,previousClose:null,dayChange:null,dayChangePct:null,marketValue:mv,totalCost:c,gainLoss:null,gainLossPct:null,sparkline:[],priceDate:null,live:false,loaded:true,estimated:true})}
 function applyStockPrice(h,i,sp){var c=holdingTotalCost(h),mv=sp.price*(h.shares||0);portfolioData[i]=Object.assign({},h,{currentPrice:sp.price,previousClose:sp.previousClose,dayChange:sp.price-sp.previousClose,dayChangePct:((sp.price-sp.previousClose)/sp.previousClose)*100,marketValue:mv,totalCost:c,gainLoss:c>0?mv-c:null,gainLossPct:c>0?((mv-c)/c)*100:null,sparkline:sp.closes?sp.closes.slice(-5):[],priceDate:sp.priceDate||new Date().toLocaleDateString(‘it-IT’),live:true,loaded:true,estimated:false})}
-function applyFundNav(h,i,nr){var c=holdingTotalCost(h),mv=nr.nav*(h.shares||0);portfolioData[i]=Object.assign({},h,{currentPrice:nr.nav,previousClose:null,dayChange:null,dayChangePct:null,marketValue:mv,totalCost:c,gainLoss:c>0?mv-c:null,gainLossPct:c>0?((mv-c)/c)*100:null,sparkline:[],priceDate:nr.priceDate||null,live:true,loaded:true,estimated:false})}
 
-function fetchWithTimeout(url, ms) {
-return new Promise(function(resolve, reject) {
-var done = false;
-var timer = setTimeout(function() {
-if (!done) { done = true; reject(new Error(‘timeout’)); }
-}, ms || 8000);
-fetch(url).then(function(r) {
-if (!done) { done = true; clearTimeout(timer); resolve(r); }
-}, function(e) {
-if (!done) { done = true; clearTimeout(timer); reject(e); }
-});
-});
-}
+async function loadPortfolio(){
+var btn=document.getElementById(‘refreshBtn’),st=document.getElementById(‘statusBar’);
+if(btn){btn.classList.add(‘loading’);btn.disabled=true;}
+if(st){st.textContent=‘Caricamento…’;st.style.display=’’;}
 
-async function tryFetchYahoo(tickers) {
-var result = {};
-var url = ‘https://query2.finance.yahoo.com/v7/finance/quote?symbols=’ + tickers.join(’,’);
-var proxies = [
-url,
-‘https://api.allorigins.win/raw?url=’ + encodeURIComponent(url),
-‘https://corsproxy.io/?url=’ + encodeURIComponent(url),
-];
-for (var i = 0; i < proxies.length; i++) {
-try {
-var r = await fetchWithTimeout(proxies[i], 6000);
-if (!r.ok) continue;
-var text = await r.text();
-var data = JSON.parse(text);
-// allorigins wraps in .contents
-if (data.contents) data = JSON.parse(data.contents);
-var quotes = data && data.quoteResponse && data.quoteResponse.result;
-if (!quotes || !quotes.length) continue;
-quotes.forEach(function(q) {
-result[q.symbol] = {
-price: q.regularMarketPrice,
-previousClose: q.regularMarketPreviousClose || q.regularMarketPrice,
-closes: [],
-priceDate: new Date().toLocaleDateString(‘it-IT’)
-};
-});
-if (Object.keys(result).length > 0) return result;
-} catch(e) { /* try next */ }
-}
-return result;
-}
-
-async function tryFetchFX() {
-try {
-var r = await fetchWithTimeout(‘https://api.frankfurter.app/latest?from=EUR&to=USD’, 5000);
-if (!r.ok) return null;
-var d = await r.json();
-return d && d.rates && d.rates.USD ? d.rates.USD : null;
-} catch(e) { return null; }
-}
-
-async function loadPortfolio() {
-var btn = document.getElementById(‘refreshBtn’);
-var st  = document.getElementById(‘statusBar’);
-btn.classList.add(‘loading’); btn.disabled = true;
-st.textContent = ‘Caricamento…’; st.style.display = ‘’;
-
-// ── Render immediately with estimates so page is never blank ──
-portfolioData = PORTFOLIO.map(function(h) { return estimatedHolding(h); });
-document.getElementById(‘mainContent’).style.display = ‘’;
-isLoading = true;
+// Render immediately with estimates — page is NEVER blank
+portfolioData=PORTFOLIO.map(function(h){return estimatedHolding(h)});
+var mc=document.getElementById(‘mainContent’);
+if(mc)mc.style.display=’’;
+isLoading=true;
 renderDashboard();
 
-// ── Try to fetch live prices (best effort, 8s timeout each) ──
-var tickers = PORTFOLIO.filter(function(h) { return h.ticker; }).map(function(h) { return h.ticker; });
-var liveCount = 0;
-
-try {
-var results = await Promise.race([
-Promise.all([tryFetchYahoo(tickers), tryFetchFX()]),
-new Promise(function(_, reject) { setTimeout(function() { reject(new Error(‘global timeout’)); }, 10000); })
-]);
-var prices = results[0], fx = results[1];
-
-```
-if (fx) {
-  eurUsdRate = fx;
-  var b = document.getElementById('fxBadge');
-  b.textContent = 'EUR/USD ' + eurUsdRate.toFixed(4); b.style.display = '';
-}
-PORTFOLIO.forEach(function(h, i) {
-  if (h.ticker && prices[h.ticker]) {
-    applyStockPrice(h, i, prices[h.ticker]);
-    liveCount++;
-  }
-});
+// Try live prices in background — give up after 8s
+var tickers=PORTFOLIO.filter(function(h){return h.ticker;}).map(function(h){return h.ticker;});
+var liveCount=0;
+try{
+var deadline=new Promise(function(_,rej){setTimeout(function(){rej(new Error(‘timeout’))},8000)});
+var priceReq=fetch(‘https://query2.finance.yahoo.com/v7/finance/quote?symbols=’+tickers.join(’,’))
+.then(function(r){if(!r.ok)throw new Error(’HTTP ’+r.status);return r.json()});
+var data=await Promise.race([priceReq,deadline]);
+var quotes=(data&&data.quoteResponse&&data.quoteResponse.result)||[];
+var map={};
+quotes.forEach(function(q){map[q.symbol]={price:q.regularMarketPrice,previousClose:q.regularMarketPreviousClose||q.regularMarketPrice,closes:[],priceDate:new Date().toLocaleDateString(‘it-IT’)};});
+PORTFOLIO.forEach(function(h,i){if(h.ticker&&map[h.ticker]){applyStockPrice(h,i,map[h.ticker]);liveCount++;}});
 renderDashboard();
-```
+}catch(e){}
 
-} catch(e) {
-// Already showing estimates — just continue
-}
-
-var tv = portfolioData.reduce(function(s, h) { return s + (h.marketValue || 0); }, 0);
-if (tv > 0) savePortfolioSnapshot(tv);
-
-isLoading = false;
-btn.classList.remove(‘loading’); btn.disabled = false;
-
-var lu = document.getElementById(‘lastUpdated’);
-lu.textContent = new Date().toLocaleTimeString(‘it-IT’, {hour:‘2-digit’, minute:‘2-digit’});
-lu.style.display = ‘’;
-
-st.style.display = ‘’;
-if (liveCount > 0) {
-st.innerHTML = ‘<span class="bdg" style="background:var(--gbg);border-color:var(--gbd);color:var(--grn)">✓ ’ + liveCount + ’ prezzi live</span>’;
-} else {
-st.innerHTML = ‘<span class="bdg" style="background:#222;border-color:#444;color:#888">Prezzi stimati (avgCost)</span>’;
+isLoading=false;
+if(btn){btn.classList.remove(‘loading’);btn.disabled=false;}
+var tv=portfolioData.reduce(function(s,h){return s+(h.marketValue||0)},0);
+if(tv>0)savePortfolioSnapshot(tv);
+var lu=document.getElementById(‘lastUpdated’);
+if(lu){lu.textContent=new Date().toLocaleTimeString(‘it-IT’,{hour:‘2-digit’,minute:‘2-digit’});lu.style.display=’’;}
+if(st){
+if(liveCount>0)st.innerHTML=’<span class="bdg" style="background:var(--gbg);border-color:var(--gbd);color:var(--grn)">✓ ‘+liveCount+’ prezzi live</span>’;
+else st.innerHTML=’<span class="bdg" style="background:#222;border-color:#444;color:#888">Prezzi stimati</span>’;
 }
 }
-
-function refreshAll() { if (!isLoading) loadPortfolio().catch(console.error); }
+function refreshAll(){if(!isLoading)loadPortfolio().catch(console.error)}
 // ================================================================
 // RENDERING
 // ================================================================
@@ -446,7 +368,35 @@ function exportCSV(){var rows=[[‘Emittente’,‘Ticker’,‘ISIN’,‘Nome�
 
 function refreshAll(){if(isLoading)return;localStorage.removeItem(CACHE_KEY);loadPortfolio().catch(function(e){console.error(e)})}
 
-function initDashboard(){try{initTheme();var types=[‘stock’,‘btp’,‘fund’,‘policy’,‘etc’,‘etf’,‘deposit’];var fc=document.getElementById(‘filterChips’);types.forEach(function(t){var b=document.createElement(‘button’);b.className=‘fc’;b.dataset.type=t;b.textContent=TL[t]||t;b.addEventListener(‘click’,function(){toggleFilter(t)});fc.appendChild(b)});loadPortfolio().catch(function(e){console.error(e)})}catch(e){document.getElementById(‘statusBar’).textContent=’Errore: ’+e.message}}
+function initDashboard(){
+// Force page visible immediately — never stay blank
+var mc = document.getElementById(‘mainContent’);
+if(mc) mc.style.display = ‘’;
+var st = document.getElementById(‘statusBar’);
+try{
+initTheme();
+var types=[‘stock’,‘btp’,‘fund’,‘policy’,‘etc’,‘etf’,‘deposit’];
+var fc=document.getElementById(‘filterChips’);
+types.forEach(function(t){
+var b=document.createElement(‘button’);
+b.className=‘fc’;b.dataset.type=t;b.textContent=TL[t]||t;
+b.addEventListener(‘click’,function(){toggleFilter(t)});
+fc.appendChild(b);
+});
+loadPortfolio().catch(function(e){
+console.error(‘loadPortfolio error:’,e);
+if(st){st.textContent=‘Errore: ‘+e.message;st.style.display=’’;}
+// Render with estimates anyway
+portfolioData=PORTFOLIO.map(function(h){return estimatedHolding(h)});
+try{renderDashboard();}catch(e2){console.error(‘render error:’,e2);}
+});
+}catch(e){
+console.error(‘initDashboard error:’,e);
+if(st){st.textContent=‘Errore init: ‘+e.message;st.style.display=’’;}
+portfolioData=PORTFOLIO.map(function(h){return estimatedHolding(h)});
+try{renderDashboard();}catch(e2){console.error(‘render error:’,e2);}
+}
+}
 if(document.readyState===‘loading’)document.addEventListener(‘DOMContentLoaded’,initDashboard);else initDashboard();
 </script>
 
